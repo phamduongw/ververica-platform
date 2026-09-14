@@ -1,0 +1,12 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: vvp
+  namespace: vvp-system
+spec:
+  host: vvp-vvp-system.apps.ocp.bnh.vn
+  to:
+    kind: Service
+    name: api-gateway
+  port:
+    targetPort: http-alt

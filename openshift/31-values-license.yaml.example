@@ -1,0 +1,6 @@
+# Do not apply this example as-is.
+# Replace {} with the complete `data` object supplied by Ververica for THIS installation token.
+global:
+  vvp:
+    license:
+      data: {}

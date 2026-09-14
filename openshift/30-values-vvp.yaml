@@ -1,0 +1,148 @@
+global:
+  database:
+    host: "docker.bnh.vn"
+    port: 5432
+    user: vvp
+    password: "oracle_4U"
+    provider: postgresql
+    createIfMissing: false
+
+  rbac:
+    additionalNamespaces:
+      - vvp-deploy
+
+  authentication:
+    single-user:
+      enabled: true
+
+  image:
+    registry: "registry.bnh.vn/registry.ververica.cloud"
+
+  imagePullSecretName: registry-common
+
+  blobStorage:
+    baseUri: "s3i://vvp"
+    s3:
+      endpoint: "http://docker.bnh.vn:9000"
+      accessKeyId: "admin"
+      secretAccessKey: "oracle_4U"
+
+  # ---------------------------------------------------------------------------
+  # PHASE 2 - LICENSE (INTENTIONALLY ABSENT DURING PHASE 1 BOOTSTRAP)
+  #
+  # Phase 1: keep this block COMMENTED. Install VVP first, then retrieve:
+  #   Your installation token is: <token>
+  # from vvp-appmanager-0 and request a license generated for THIS token.
+  #
+  # The runbook uses 31-values-license.yaml as a separate overlay. If you prefer
+  # one values file, paste the vendor-provided block at THIS exact path under
+  # global, preserving the payload verbatim:
+  #
+  # vvp:
+  #   license:
+  #     data:
+  #       kind: License
+  #       apiVersion: v1
+  #       metadata:
+  #         ...
+  #       spec:
+  #         ...
+  #
+  # Do not put a placeholder/old-cluster license here during Phase 1.
+
+api-gateway:
+  publicApiEndpoint: "http://vvp-vvp-system.apps.ocp.bnh.vn"
+
+vvp-gateway:
+  resources:
+    limits:
+      cpu: "1"
+      memory: "3.5Gi"
+    requests:
+      cpu: "0.25"
+      memory: "1Gi"
+
+vvp-appmanager:
+  flinkVersionMetas:
+    jdk11:
+      installByDefault: false
+    jdk17:
+      installByDefault: true
+
+  resources:
+    limits:
+      cpu: "1"
+      memory: "3.5Gi"
+    requests:
+      cpu: "0.5"
+      memory: "3Gi"
+
+  globalDeploymentDefaults:
+    numberOfTaskSlots: 1
+    flinkConfiguration:
+      execution.checkpointing.interval: "10s"
+      web.cancel.enable: "false"
+
+  globalSessionClusterDefaults: |-
+    spec:
+      flinkConfiguration:
+        taskmanager.numberOfTaskSlots: "1"
+        web.cancel.enable: "false"
+
+vvp-appagent:
+  persistentVolume:
+    size: 40Gi
+    storageClass: thin-csi
+
+  appAgentResources:
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+    requests:
+      cpu: "0.25"
+      memory: "1Gi"
+
+  sqlServiceResources:
+    limits:
+      cpu: "1"
+      memory: "3.5Gi"
+    requests:
+      cpu: "0.5"
+      memory: "2.5Gi"
+
+vvp-autopilot:
+  resources:
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+    requests:
+      cpu: "0.25"
+      memory: "1Gi"
+
+vvp-meta:
+  resources:
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+    requests:
+      cpu: "0.25"
+      memory: "1Gi"
+
+vvp-advisor:
+  resources:
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+    requests:
+      cpu: "0.25"
+      memory: "1Gi"
+
+vvp-console-ui:
+  ui:
+    resources:
+      limits:
+        cpu: "1"
+        memory: "128Mi"
+      requests:
+        cpu: "0.5"
+        memory: "128Mi"

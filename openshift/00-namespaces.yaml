@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vvp-system
+  annotations:
+    openshift.io/node-selector: "workload.ververica.io/pool=lab"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vvp-deploy
+  annotations:
+    openshift.io/node-selector: "workload.ververica.io/pool=lab"
