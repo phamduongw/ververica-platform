@@ -70,6 +70,13 @@ vvp-appmanager:
             pods:
               nodeSelector:
                 workload.ververica.io/pool: lab
+    batchSpec:
+      template:
+        spec:
+          kubernetes:
+            pods:
+              nodeSelector:
+                workload.ververica.io/pool: lab
 
   globalSessionClusterDefaults: |-
     spec:

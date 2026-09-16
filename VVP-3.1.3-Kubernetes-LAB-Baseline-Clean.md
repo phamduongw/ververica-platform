@@ -192,6 +192,13 @@ vvp-appmanager:
             pods:
               nodeSelector:
                 workload.ververica.io/pool: lab
+    batchSpec:
+      template:
+        spec:
+          kubernetes:
+            pods:
+              nodeSelector:
+                workload.ververica.io/pool: lab
 
   globalSessionClusterDefaults: |-
     spec:
@@ -421,9 +428,16 @@ printf '%s' "$signature_b64" | base64 -d >/dev/null || {
   echo "ERROR: decoded licenseSpec does not match spec; use the vendor-supplied license unchanged" >&2; exit 1;
 }
 
+secret_json="$("$CLI" get secret "$SECRET" -n "$NAMESPACE" --ignore-not-found=true -o json)" || {
+  echo "ERROR: unable to read fingerprint Secret; refusing license activation" >&2
+  exit 1
+}
 cluster_token=""
-if "$CLI" get secret "$SECRET" -n "$NAMESPACE" >/dev/null 2>&1; then
-  cluster_token="$("$CLI" get secret "$SECRET" -n "$NAMESPACE" -o jsonpath='{.data.fingerprint}' | base64 -d)"
+if [[ -n "$secret_json" ]]; then
+  cluster_token="$(printf '%s' "$secret_json" | jq -er '.data.fingerprint | select(type == "string" and length > 0)' | base64 -d)" || {
+    echo "ERROR: fingerprint Secret has invalid JSON, missing fingerprint, or invalid base64" >&2
+    exit 1
+  }
 else
   if [[ -n "${INSTALLATION_TOKEN:-}" ]]; then
     cluster_token="$INSTALLATION_TOKEN"
@@ -438,8 +452,6 @@ fi
 
 [[ "$license_token" == "$cluster_token" ]] || {
   echo "ERROR: license token does not match this installation fingerprint/token" >&2
-  echo "license: $license_token" >&2
-  echo "cluster: $cluster_token" >&2
   exit 1
 }
 
@@ -447,27 +459,34 @@ echo "PASS: licenseSpec == spec"
 echo "PASS: license token matches this installation"
 echo "License ID: $license_id"
 
-label_matches="$("$CLI" get secrets -n "$NAMESPACE" -l name=vvp-license-fingerprint -o json | jq -r '.items | length')"
+label_json="$("$CLI" get secrets -n "$NAMESPACE" -l name=vvp-license-fingerprint -o json)" || {
+  echo "ERROR: unable to list fingerprint Secrets; refusing license activation" >&2
+  exit 1
+}
+label_matches="$(printf '%s' "$label_json" | jq -er '.items | select(type == "array") | length')" || {
+  echo "ERROR: invalid fingerprint Secret list response" >&2
+  exit 1
+}
 if (( label_matches > 1 )); then
   echo "ERROR: more than one Secret has label name=vvp-license-fingerprint" >&2
   exit 1
 fi
 if (( label_matches == 1 )); then
-  labeled_name="$("$CLI" get secrets -n "$NAMESPACE" -l name=vvp-license-fingerprint -o json | jq -r '.items[0].metadata.name')"
+  labeled_name="$(printf '%s' "$label_json" | jq -er '.items[0].metadata.name')"
   [[ "$labeled_name" == "$SECRET" ]] || {
     echo "ERROR: label name=vvp-license-fingerprint belongs to unexpected Secret '$labeled_name'" >&2; exit 1;
   }
 fi
 
-if ! "$CLI" get secret "$SECRET" -n "$NAMESPACE" >/dev/null 2>&1; then
+if [[ -z "$secret_json" ]]; then
   echo "PASS: fingerprint Secret is absent; no Helm adoption is required."
-  echo "Helm 3.1.3 will render the Secret from the inline license token."
+  echo "The VVP 3.1.3 chart will render the Secret from the inline license token."
   exit 0
 fi
 
-owner_release="$("$CLI" get secret "$SECRET" -n "$NAMESPACE" -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null || true)"
-owner_namespace="$("$CLI" get secret "$SECRET" -n "$NAMESPACE" -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-namespace}' 2>/dev/null || true)"
-manager="$("$CLI" get secret "$SECRET" -n "$NAMESPACE" -o jsonpath='{.metadata.labels.app\.kubernetes\.io/managed-by}' 2>/dev/null || true)"
+owner_release="$(printf '%s' "$secret_json" | jq -r '.metadata.annotations["meta.helm.sh/release-name"] // ""')"
+owner_namespace="$(printf '%s' "$secret_json" | jq -r '.metadata.annotations["meta.helm.sh/release-namespace"] // ""')"
+manager="$(printf '%s' "$secret_json" | jq -r '.metadata.labels["app.kubernetes.io/managed-by"] // ""')"
 
 [[ -z "$owner_release" || "$owner_release" == "$RELEASE" ]] || {
   echo "ERROR: Secret belongs to Helm release '$owner_release', expected '$RELEASE'" >&2; exit 1;
@@ -480,8 +499,7 @@ manager="$("$CLI" get secret "$SECRET" -n "$NAMESPACE" -o jsonpath='{.metadata.l
 }
 
 mkdir -p backups
-"$CLI" get secret "$SECRET" -n "$NAMESPACE" -o yaml > "backups/${SECRET}-$(date -u +%Y%m%dT%H%M%SZ).yaml"
-chmod 600 backups/${SECRET}-*.yaml 2>/dev/null || true
+printf '%s\n' "$secret_json" > "backups/${SECRET}-$(date -u +%Y%m%dT%H%M%SZ).yaml"
 
 "$CLI" label secret "$SECRET" -n "$NAMESPACE" \
   name=vvp-license-fingerprint \

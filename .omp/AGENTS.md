@@ -95,12 +95,13 @@ Trong phiên đã chạy offline: heredoc cat roundtrip/byte parity; bash -n; re
 
 User đã cung cấp output OpenShift: tất cả platform Pod 1/1 Running; appmanager/gateway được tạo lại sau restart; Route HTTP cũ Admitted=True nhưng UI không truy cập được. Đây là bằng chứng do user cung cấp, không phải live verification của assistant. HTTPS hostname mới đã render vào ConfigMap api-gateway-settings; chưa có bằng chứng live DNS/cert/header/UI sau thay đổi. Không kết luận Route là nguyên nhân chắc chắn của lỗi UI, không tuyên bố Flink runtime đã chạy job.
 
-### Phát hiện review end-to-end chưa sửa
+### Kết quả sửa findings review end-to-end
 
-- Helper của cả hai profile coi lỗi GET Secret như Secret không tồn tại; các lần đọc ownership còn bỏ qua lỗi. Lỗi API/RBAC có thể dẫn đến fallback token local, báo PASS sai hoặc bỏ qua kiểm tra ownership. Cần phân biệt NotFound với lỗi truy cập và dừng khi không đọc được ownership.
-- Helper in cả license token và cluster token khi mismatch; cần bỏ giá trị nhạy cảm khỏi thông báo lỗi. Không chia sẻ output lỗi hiện tại.
-- Kubernetes chỉ đặt nodeSelector trong `globalDeploymentDefaults.spec` và session defaults, chưa đặt `batchSpec`. Chart local tách defaults STREAMING/BATCH; chưa được khẳng định dedicated batch jobs cũng bị pin vào pool LAB. Post-renderer không xử lý Pod do runtime tạo sau đó.
-- Review này đã kiểm offline 13 heredoc, Bash syntax và render 83 manifest mỗi profile; Service HTTP 8080, Route edge và platform scheduling đạt các assertion. Đây không phải kiểm chứng end-to-end trên cluster; các phát hiện trên chưa được sửa trong source/runbook.
+- Helper của cả hai profile đọc fingerprint Secret một lần bằng `--ignore-not-found=true -o json`: chỉ NotFound trả nội dung rỗng; lỗi GET khác phải dừng. Fingerprint và ownership lấy từ cùng JSON đã đọc thành công, không còn bỏ qua lỗi đọc ownership riêng lẻ.
+- Khi mismatch, helper chỉ báo lỗi, không in license token hoặc cluster token. Thông báo render ghi đúng “The VVP 3.1.3 chart”, không gọi 3.1.3 là version Helm.
+- Kubernetes đặt nodeSelector LAB cho cả `globalDeploymentDefaults.spec`, `batchSpec` và session defaults. Post-renderer vẫn chỉ xử lý platform manifest; AppManager defaults xử lý deployment runtime.
+- Kiểm offline: 13 heredoc khớp bytes source, Bash syntax và render 83 manifest mỗi profile từ đúng thư mục profile; ConfigMap AppManager chứa selector trong cả streaming/batch defaults. Smoke helper bằng fixture giả cho Forbidden, timeout, API unavailable, invalid Secret JSON, thiếu fingerprint, fingerprint base64 lỗi, lỗi API/list JSON, token mismatch, foreign ownership: đều dừng không mutation; NotFound fallback và adoption thành công; output không lộ token giả. Không chạy helper hoặc Flink job thật trên cluster.
+- Sau review, người dùng đã cho phép commit/push các bản sửa. Helper dùng một GET Secret cho fingerprint, ownership và backup snapshot (JSON hợp lệ dưới định dạng YAML); LIST label cũng chỉ đọc một lần. Smoke 12 tình huống mỗi profile xác nhận mọi failure path đã thử đều không gọi label/annotate; đây vẫn là stub smoke, không phải kiểm chứng live.
 
 ### Git, credentials và bàn giao
 
