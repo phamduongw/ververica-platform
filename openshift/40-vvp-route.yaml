@@ -4,9 +4,12 @@ metadata:
   name: vvp
   namespace: vvp-system
 spec:
-  host: vvp-vvp-system.apps.ocp.bnh.vn
+  host: vvp.apps.ocp.bnh.vn
   to:
     kind: Service
     name: api-gateway
   port:
     targetPort: http-alt
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

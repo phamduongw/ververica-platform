@@ -6,7 +6,7 @@ CLI="${KUBECTL:-kubectl}"
 NAMESPACE="${NAMESPACE:-vvp-system}"
 RELEASE="${RELEASE:-ververica-platform}"
 SECRET="vvp-license-fingerprint"
-LICENSE_FILE="${1:-31-values-license.yaml}"
+LICENSE_FILE="${1:-30-values-vvp.yaml}"
 TOKEN_FILE="${INSTALLATION_TOKEN_FILE:-.work/installation-token.txt}"
 
 for bin in "$CLI" yq jq base64; do

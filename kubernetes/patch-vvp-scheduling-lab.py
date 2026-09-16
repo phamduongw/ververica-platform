@@ -7,7 +7,10 @@ NODE_SELECTOR = {
 }
 
 def patch_pod_spec(pod_spec):
-    selector = pod_spec.setdefault("nodeSelector", {})
+    selector = pod_spec.get("nodeSelector")
+    if selector is None:
+        selector = {}
+        pod_spec["nodeSelector"] = selector
     selector.update(NODE_SELECTOR)
 
 documents = []

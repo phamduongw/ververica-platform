@@ -27,31 +27,12 @@ global:
       accessKeyId: "admin"
       secretAccessKey: "oracle_4U"
 
-  # ---------------------------------------------------------------------------
-  # PHASE 2 - LICENSE (INTENTIONALLY ABSENT DURING PHASE 1 BOOTSTRAP)
-  #
-  # Phase 1: keep this block COMMENTED. Install VVP first, then retrieve:
-  #   Your installation token is: <token>
-  # from vvp-appmanager-0 and request a license generated for THIS token.
-  #
-  # The runbook uses 31-values-license.yaml as a separate overlay. If you prefer
-  # one values file, paste the vendor-provided block at THIS exact path under
-  # global, preserving the payload verbatim:
-  #
-  # vvp:
-  #   license:
-  #     data:
-  #       kind: License
-  #       apiVersion: v1
-  #       metadata:
-  #         ...
-  #       spec:
-  #         ...
-  #
-  # Do not put a placeholder/old-cluster license here during Phase 1.
+  vvp:
+    license:
+      data: {}
 
 api-gateway:
-  publicApiEndpoint: "http://vvp-vvp-system.apps.ocp.bnh.vn"
+  publicApiEndpoint: "https://vvp.apps.ocp.bnh.vn"
 
 vvp-gateway:
   resources:

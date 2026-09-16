@@ -1,89 +1,32 @@
-# Ververica Platform 3.1.3 — Kubernetes LAB Baseline Runbook
+# VVP 3.1.3 — Kubernetes LAB: cài đặt và cấu hình
 
-**Profile:** vanilla Kubernetes, vendor chart 3.1.3 nguyên bản, PostgreSQL/S3 external, private registry, single-user bootstrap, Flink runtime ở `vvp-deploy`, scheduling pool `workload.ververica.io/pool=lab`, public endpoint `http://vvp.apps.k8s.bnh.vn`.
+Các block tạo file bên dưới **ghi đè baseline cùng tên**. Chỉ tạo `30-values-vvp.yaml` trước lần cài đặt ban đầu; sau khi nhận license, sửa file hiện có và không chạy lại block `cat` của file này. Không chạy lại các block tạo file trên cấu hình đã tùy biến. Thực hiện từ thư mục `kubernetes/`, chart ở `../ververica-platform-3.1.3.tgz`. Hai profile là hai phương án cài đặt; mỗi installation cần license cấp cho đúng installation token của nó.
 
-> Đây là baseline sạch. Không dùng customer fork `common.podScheduling`, không dùng `global.nodeSelector` cho control-plane vì package vendor 3.1.3 đã được render và field này **không được consume**. Không dùng OpenShift namespace annotation trên vanilla Kubernetes.
+## 1. Thông số và điều kiện áp dụng
 
-## Nguồn chuẩn đã đối chiếu
+| Hạng mục | Cấu hình LAB |
+| --- | --- |
+| Release | `ververica-platform` |
+| Namespaces | `vvp-system`, `vvp-deploy` |
+| Workers | `wk-01.k8s.bnh.vn`, `wk-02.k8s.bnh.vn` |
+| StorageClass | `vsphere-rwo` |
+| Endpoint | `http://vvp.apps.k8s.bnh.vn` |
+| Gateway / address | `gateway-system/apps-gateway` / `192.168.100.50` |
 
-Runbook này được khóa theo **Ververica Platform 3.1.3** và package lab đã audit:
+Áp dụng cho cluster vanilla Kubernetes có RBAC, Helm 3 và CLI `kubectl` có sẵn với quyền cài đặt. PostgreSQL 15.x, S3 và registry phải sẵn sàng, truy cập và xác thực được từ worker; StorageClass và DNS phải phù hợp với bảng LAB. Thực hiện các bước theo thứ tự; chỉ chuyển sang block tiếp theo khi block hiện tại thành công và đạt điều kiện được nêu. Khi thiếu điều kiện hoặc lệnh lỗi, dừng để xử lý nguyên nhân. SQL cần `psql`; helper cần Bash, Mike Farah `yq` v4, `jq`, `base64` có sẵn. Post-renderer cần Python 3 và PyYAML 6.0.3 có sẵn. Xem [điều kiện vendor](https://docs.ververica.com/docs/vvp3/getting-started).
 
-- `ververica-platform-3.1.3.tgz` SHA256: `00d1d472b26ebe85c09b9d2416b7372d74728af2c1bfbe12d37fba1309a6ed96`.
-- Ververica — Getting Started: Self-managed v3.x: https://docs.ververica.com/docs/vvp3/getting-started
-- Ververica — VVP 3.1.3 release notes: https://docs.ververica.com/docs/vvp3/release-notes/vvp-313
-- Ververica — PostgreSQL as Metadata Store: https://docs.ververica.com/docs/vvp3/user-guides/admin-operator-guide/postgresql-metadata-store
-- Ververica — Platform-Wide Deployment Defaults: https://docs.ververica.com/docs/vvp3/user-guides/admin-operator-guide/manage-configuration-settings/platform-deployment-defaults
-- Ververica — Private Image Registry: https://docs.ververica.com/docs/vvp3/user-guides/admin-operator-guide/private-image-registry
-- Ververica — Blob Storage: https://docs.ververica.com/docs/vvp3/user-guides/admin-operator-guide/blob-storage
+> **Chưa xác minh live:** Bảng là cấu hình LAB, không chứng nhận target vanilla Kubernetes. Không chạy profile này trên OpenShift. Vendor công bố Kubernetes 1.24–1.34 trong [Getting Started](https://docs.ververica.com/docs/vvp3/getting-started).
 
-Các điểm mà runbook dựa trực tiếp vào source chart 3.1.3: `global.security.openshift`, `global.rbac.additionalNamespaces`, `vvp-appmanager.flinkVersionMetas`, `globalDeploymentDefaults`, `globalSessionClusterDefaults`, `vvp-console-ui.ui.resources`, và template `vvp-license-fingerprint`. Không copy key legacy từ VVP 2.x.
+Baseline LAB được cấu hình trên [package 3.1.3](ververica-platform-3.1.3.tgz), member `ververica-platform/Chart.yaml` có `version` và `appVersion: 3.1.3`; schema/defaults lấy từ `ververica-platform/values.yaml`. Đây không phải toàn bộ defaults hoặc khuyến nghị production của vendor. Metadata này không chứng minh package byte-identical với bản OCI vendor; các nhận định template chỉ áp dụng package đã đối chiếu. `kubeVersion: >=1.19.0-0` của chart không thay thế support matrix vendor.
 
+## 2. Gán nhãn worker và tạo namespace
 
-> **Không chạy đồng thời hai profile K8s và OpenShift này vào cùng bộ metadata DB/bucket.** Official Ververica khuyến nghị metadata database dành cho một VVP installation; mỗi installation cũng phải có installation token/license riêng. Hai runbook là hai phương án triển khai độc lập.
+Hai worker và label `workload.ververica.io/pool=lab` là lựa chọn LAB. Tạo cả namespace platform và runtime trước install theo [Getting Started](https://docs.ververica.com/docs/vvp3/getting-started); `global.rbac.additionalNamespaces` cấu hình phạm vi RBAC, không tự tạo namespace.
 
-## 1. Kiến trúc và các quyết định baseline
-
-- Platform namespace: `vvp-system`.
-- Flink runtime namespace: `vvp-deploy`.
-- PostgreSQL external: `docker.bnh.vn:5432`, provider `postgresql`, `createIfMissing=false`.
-- S3-compatible external: `s3i://vvp`, endpoint `http://docker.bnh.vn:9000`.
-- Registry prefix: `registry.bnh.vn/registry.ververica.cloud`; repository của chart đã chứa `platform-images/...`, vì vậy **không** thêm `/platform-images` vào `global.image.registry`.
-- Pull Secret `registry-common` phải có ở cả `vvp-system` và `vvp-deploy`.
-- Java policy: JDK11 không seed, JDK17 seed.
-- Streaming-only baseline; không khai báo `batchSpec`.
-- Không override `systemDeploymentDefaults` / `systemSessionClusterDefaults`.
-- Không thêm metrics port 9249 hoặc S3 application `fs.s3a.*` vào global Flink defaults.
-- `api-gateway.publicApiEndpoint` được giữ đúng external URL để callback OIDC/Keycloak sau này không dùng URL mặc định của chart.
-- `global.rbac.additionalNamespaces` chỉ để `vvp-deploy`: exact root values 3.1.3 mặc định như vậy và chart tạo RBAC cho release namespace `vvp-system` riêng.
-- `single-user.enabled: true` được pin tường minh; không dựa vào mô tả/default chung của tài liệu vì exact package được audit có default `false`.
-
-### Scheduling
-
-Vanilla Kubernetes không có project/namespace admission selector tương đương OpenShift. Exact vendor chart 3.1.3 render `nodeSelector: null` trên control-plane nếu chỉ thêm `global.nodeSelector`. Vì vậy:
-
-- **Control-plane VVP**: dùng `patch-vvp-scheduling-lab.py` làm Helm post-renderer trên **mọi install/upgrade**.
-- **Flink JobManager/TaskManager**: dùng `vvp-appmanager.globalDeploymentDefaults` và `globalSessionClusterDefaults` với `kubernetes.pods.nodeSelector`.
-
-Không dùng customer fork và post-renderer đồng thời.
-
-## 2. Preflight
+### Tạo `00-namespaces.yaml`
 
 ```bash
-kubectl config current-context
-kubectl version
-helm version --short
-kubectl get nodes -o wide
-kubectl get sc vsphere-rwo
-kubectl get gateway -A
-yq --version
-jq --version
-python3 -c 'import yaml; print(yaml.__version__)'
-```
-
-VVP 3.x official support matrix hiện nêu Kubernetes 1.24–1.34 và Helm 3. PostgreSQL phải là 15+. Kiểm tra DiskPressure và ephemeral storage trước khi kéo image:
-
-```bash
-kubectl get nodes -o custom-columns='NAME:.metadata.name,DISK:.status.conditions[?(@.type=="DiskPressure")].status,EPHEMERAL:.status.allocatable.ephemeral-storage'
-```
-
-## 3. Label worker pool
-
-LAB hiện dùng hai worker:
-
-```bash
-kubectl label node wk-01.k8s.bnh.vn wk-02.k8s.bnh.vn \
-  workload.ververica.io/pool=lab --overwrite
-
-kubectl get nodes -L workload.ververica.io/pool
-```
-
-`wk-03` không được mang label này nếu muốn loại khỏi pool.
-
-## 4. Bootstrap Kubernetes resources
-
-### `00-namespaces.yaml`
-
-```yaml
+cat > 00-namespaces.yaml <<'EOF'
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -93,11 +36,22 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: vvp-deploy
+EOF
 ```
 
-### `01-registry-secrets.yaml`
+```bash
+kubectl label node wk-01.k8s.bnh.vn wk-02.k8s.bnh.vn workload.ververica.io/pool=lab --overwrite &&
+kubectl apply -f 00-namespaces.yaml
+```
 
-```yaml
+## 3. Tạo Secret truy cập registry
+
+Tạo `registry-common` ở cả `vvp-system` và `vvp-deploy`. [Private Image Registry](https://docs.ververica.com/docs/vvp3/user-guides/admin-operator-guide/private-image-registry) yêu cầu mirror platform, vera, artifact-fetcher và Flink runtime cùng các image phụ thuộc cần dùng, đúng tag của package đang cài. Tag lấy từ chart 3.1.3, không lấy bảng ví dụ 3.1.2. Registry mirror và credentials dưới đây là lựa chọn LAB. Helm render chỉ sinh manifest, không kéo image.
+
+### Tạo `01-registry-secrets.yaml`
+
+```bash
+cat > 01-registry-secrets.yaml <<'EOF'
 apiVersion: v1
 kind: Secret
 metadata:
@@ -117,24 +71,21 @@ type: kubernetes.io/dockerconfigjson
 stringData:
   .dockerconfigjson: |
     {"auths":{"registry.bnh.vn":{"username":"admin","password":"oracle_4U","auth":"YWRtaW46b3JhY2xlXzRV"}}}
+EOF
 ```
-
-Apply:
 
 ```bash
-kubectl apply -f 00-namespaces.yaml
 kubectl apply -f 01-registry-secrets.yaml
-kubectl get secret registry-common -n vvp-system
-kubectl get secret registry-common -n vvp-deploy
 ```
 
-## 5. PostgreSQL provisioning
+## 4. Tạo role và database PostgreSQL
 
-Official VVP PostgreSQL guide liệt kê 8 DB khi Kubernetes Operator được dùng. Exact chart 3.1.3 mặc định `global.k8sOperator.enabled=false`, nên baseline này chỉ cần 7 DB. Nếu sau này bật operator, tạo thêm `vvp-k8soperator` trước.
+`provider: postgresql`, `createIfMissing: false` là override hợp lệ theo [PostgreSQL as Metadata Store](https://docs.ververica.com/docs/vvp3/user-guides/admin-operator-guide/postgresql-metadata-store) và `ververica-platform/values.yaml` trong [package 3.1.3](ververica-platform-3.1.3.tgz); DB phải tồn tại trước install. DBA có `psql` chạy SQL riêng một lần khi role/DB chưa tồn tại; không chạy lại trên metadata có dữ liệu. SQL gồm bảy DB của baseline; DB thứ tám `vvp-k8soperator` chỉ cần khi bật `global.k8sOperator.enabled=true`, mặc định chart là `false`.
 
-### `10-postgresql-provision.sql`
+### Tạo `10-postgresql-provision.sql`
 
-```sql
+```bash
+cat > 10-postgresql-provision.sql <<'EOF'
 \set ON_ERROR_STOP on
 
 CREATE ROLE vvp LOGIN PASSWORD 'oracle_4U';
@@ -149,40 +100,26 @@ CREATE DATABASE "accesscontrol" OWNER vvp;
 
 -- Only if global.k8sOperator.enabled=true later:
 -- CREATE DATABASE "vvp-k8soperator" OWNER vvp;
+EOF
 ```
-
-Chỉ chạy file trên cho **instance mới chưa có role/DB**. Không chạy lại mù quáng trên metadata store đã có dữ liệu. Sau đó test:
 
 ```bash
-export PGPASSWORD='oracle_4U'
-for db in vvp-appmanager vvp-autopilot vvp-meta vvp-gateway vvp-advisor vvp-premise accesscontrol; do
-  psql -X -v ON_ERROR_STOP=1 -h docker.bnh.vn -p 5432 -U vvp -d "$db" -Atc 'select 1;' \
-    && echo "$db OK" || exit 1
-done
-unset PGPASSWORD
+read -r -p 'PostgreSQL admin user do DBA cấp: ' PGADMIN &&
+test -n "$PGADMIN" &&
+psql -X -W -v ON_ERROR_STOP=1 -h docker.bnh.vn -p 5432 \
+  -U "$PGADMIN" -d postgres -f 10-postgresql-provision.sql
 ```
 
-Kiểm tra connection budget bằng DBA; `max_connections=200` là cấu hình LAB đã dùng, không phải minimum chính thức của Ververica:
+## 5. Tạo Helm values cho platform
 
-```sql
-SHOW max_connections;
-SHOW superuser_reserved_connections;
-SELECT datname, usename, state, count(*)
-FROM pg_stat_activity
-WHERE backend_type='client backend'
-GROUP BY datname, usename, state
-ORDER BY count(*) DESC;
-```
+Endpoints, DB/S3, registry mirror, credentials, resource requests/limits, JDK17 và Flink deployment/session defaults là lựa chọn LAB được giữ nguyên, không phải sizing tối thiểu hay mặc định vendor. Không suy ra runtime đã hoạt động live từ values hoặc render. PVC `vvp` do `ververica-platform/charts/vvp-appagent/templates/sql-pvc.yaml` trong [package 3.1.3](ververica-platform-3.1.3.tgz) tạo; `40Gi` và `vsphere-rwo` là override LAB. Single-user bootstrap được bật tường minh.
 
-## 6. Base Helm values — chưa có license
+Giữ `global.vvp.license.data: {}` cho lần render/cài đặt ban đầu. Sau khi nhận license, sửa trực tiếp trường này trong cùng file ở bước 7. Khối `vvp` nằm trong `global`, sau `blobStorage` và trước các override subchart. Root `ververica-platform/values.yaml` không khai báo sẵn khối license; đường dẫn `global.vvp.license.data` được template chart sử dụng, không có thứ tự key license bắt buộc trong YAML.
 
-Thứ tự được giữ theo **relative order của các key thực sự khai báo trong root `values.yaml` 3.1.3**: `database` → `rbac` → `authentication` → `image` → `imagePullSecretName`. `blobStorage` và `global.vvp.license` là các key được template/subchart và tài liệu official sử dụng nhưng không được khai báo thành block mặc định trong root `values.yaml`; baseline đặt chúng sau nhóm registry, trước các top-level subchart overrides. YAML mapping không có semantics theo thứ tự, nhưng convention này giữ file dễ audit với chart gốc.
+### Tạo `30-values-vvp.yaml`
 
-`api-gateway` là subchart override bổ sung, đặt ngay sau `global`; sau đó các block VVP giữ thứ tự chart: `vvp-gateway`, `vvp-appmanager`, `vvp-appagent`, `vvp-autopilot`, `vvp-meta`, `vvp-advisor`, `vvp-console-ui`.
-
-### `30-values-vvp.yaml`
-
-```yaml
+```bash
+cat > 30-values-vvp.yaml <<'EOF'
 global:
   database:
     host: "docker.bnh.vn"
@@ -212,28 +149,9 @@ global:
       accessKeyId: "admin"
       secretAccessKey: "oracle_4U"
 
-  # ---------------------------------------------------------------------------
-  # PHASE 2 - LICENSE (INTENTIONALLY ABSENT DURING PHASE 1 BOOTSTRAP)
-  #
-  # Phase 1: keep this block COMMENTED. Install VVP first, then retrieve:
-  #   Your installation token is: <token>
-  # from vvp-appmanager-0 and request a license generated for THIS token.
-  #
-  # The runbook uses 31-values-license.yaml as a separate overlay. If you prefer
-  # one values file, paste the vendor-provided block at THIS exact path under
-  # global, preserving the payload verbatim:
-  #
-  # vvp:
-  #   license:
-  #     data:
-  #       kind: License
-  #       apiVersion: v1
-  #       metadata:
-  #         ...
-  #       spec:
-  #         ...
-  #
-  # Do not put a placeholder/old-cluster license here during Phase 1.
+  vvp:
+    license:
+      data: {}
 
 api-gateway:
   publicApiEndpoint: "http://vvp.apps.k8s.bnh.vn"
@@ -342,24 +260,15 @@ vvp-console-ui:
       requests:
         cpu: "0.5"
         memory: "128Mi"
+EOF
 ```
 
-### `31-values-license.yaml.example`
+Đây là tùy biến LAB để pin platform vào pool worker, không phải yêu cầu cài đặt chung của Ververica. Baseline này truyền post-renderer cho mọi Helm template/install/activation; values đặt deployment/session defaults cho Flink runtime.
 
-```yaml
-# Do not apply this example as-is.
-# Replace {} with the complete `data` object supplied by Ververica for THIS installation token.
-global:
-  vvp:
-    license:
-      data: {}
-```
+### Tạo `patch-vvp-scheduling-lab.py`
 
-## 7. Kubernetes scheduling post-renderer
-
-### `patch-vvp-scheduling-lab.py`
-
-```python
+```bash
+cat > patch-vvp-scheduling-lab.py <<'EOF' &&
 #!/usr/bin/env python3
 import sys
 import yaml
@@ -369,7 +278,10 @@ NODE_SELECTOR = {
 }
 
 def patch_pod_spec(pod_spec):
-    selector = pod_spec.setdefault("nodeSelector", {})
+    selector = pod_spec.get("nodeSelector")
+    if selector is None:
+        selector = {}
+        pod_spec["nodeSelector"] = selector
     selector.update(NODE_SELECTOR)
 
 documents = []
@@ -409,128 +321,68 @@ yaml.safe_dump_all(
     default_flow_style=False,
     sort_keys=False,
 )
-```
-
-```bash
+EOF
 chmod +x patch-vvp-scheduling-lab.py
-python3 -c 'import yaml'
 ```
 
-## 8. Render gate trước bootstrap
+## 6. Render manifest và cài đặt ban đầu
 
-Render **có post-renderer**:
+Render manifest ra stdout để kiểm tra cấu hình. Lần cài đặt ban đầu không dùng `--wait`/`--atomic`. Theo [Getting Started](https://docs.ververica.com/docs/vvp3/getting-started), một số core Pod chưa Ready trước license là dự kiến; không quy mọi lỗi bootstrap cho thiếu license.
 
 ```bash
-helm template ververica-platform \
-  ./ververica-platform-3.1.3.tgz \
-  --namespace vvp-system \
-  --values 30-values-vvp.yaml \
-  --post-renderer ./patch-vvp-scheduling-lab.py \
-  > /tmp/vvp-bootstrap-rendered.yaml
-```
-
-Gate 1 — không được có PG init container/vendor PostgreSQL image vì `createIfMissing=false`:
-
-```bash
-if grep -nE 'pg-init|platform-images/postgresql' /tmp/vvp-bootstrap-rendered.yaml; then
-  echo 'FAIL: unexpected PostgreSQL init container' >&2; exit 1
-else
-  echo 'PASS: external PostgreSQL mode'
-fi
-```
-
-Gate 2 — mọi Deployment/StatefulSet phải có selector LAB sau post-renderer:
-
-```bash
-yq e 'select(.kind == "Deployment" or .kind == "StatefulSet") | {"kind": .kind, "name": .metadata.name, "nodeSelector": .spec.template.spec.nodeSelector}' /tmp/vvp-bootstrap-rendered.yaml
-```
-
-Mỗi object phải có:
-
-```yaml
-nodeSelector:
-  workload.ververica.io/pool: lab
-```
-
-Gate 3 — kiểm tra image prefix:
-
-```bash
-grep -oE 'image: .*registry.bnh.vn/registry.ververica.cloud[^ ]*' /tmp/vvp-bootstrap-rendered.yaml | sort -u
-```
-
-Không được có `.../platform-images/platform-images/...`.
-
-## 9. Initial Helm install — bootstrap chưa có license
-
-Official flow cho phép core pod chưa Ready trong giai đoạn này, nên **không dùng `--wait` hoặc `--atomic`** ở bước bootstrap.
-
-```bash
-helm install ververica-platform \
-  ./ververica-platform-3.1.3.tgz \
-  --namespace vvp-system \
-  --values 30-values-vvp.yaml \
+helm template ververica-platform ../ververica-platform-3.1.3.tgz \
+  -n vvp-system -f 30-values-vvp.yaml --include-crds \
   --post-renderer ./patch-vvp-scheduling-lab.py
 ```
 
-Kiểm tra:
+Chỉ chạy lệnh cài đặt dưới đây khi render thành công.
 
 ```bash
-helm status ververica-platform -n vvp-system
-kubectl get pods -n vvp-system -o wide
+helm install ververica-platform ../ververica-platform-3.1.3.tgz \
+  -n vvp-system -f 30-values-vvp.yaml \
+  --post-renderer ./patch-vvp-scheduling-lab.py &&
+kubectl get pods -n vvp-system
 ```
 
-## Quy trình license chuẩn cho bootstrap mới
+## 7. Lấy và kích hoạt license ban đầu
 
-Baseline **không chứa license**. Đây là chủ đích, vì mỗi installation có fingerprint/token riêng. Official VVP flow là: cài lần đầu → đọc `Your installation token is:` từ AppManager → xin license cho đúng token → chạy `helm upgrade` để áp license. Core pod chưa Ready trước khi có license là trạng thái dự kiến của bootstrap.
+Theo [Getting Started](https://docs.ververica.com/docs/vvp3/getting-started), lấy token AppManager, gửi `license_request@ververica.com`, nhận toàn bộ object vendor tại `global.vvp.license.data`, rồi Helm upgrade để hoàn tất installation. License được lưu trực tiếp trong `30-values-vvp.yaml`; helper dưới đây là công cụ LAB. Giữ kín log, token và license.
 
-Exact chart 3.1.3 có thêm một chi tiết quan trọng: khi bootstrap không có inline license, service có thể tự tạo `vvp-license-fingerprint`. Khi upgrade sang inline license, Helm sẽ từ chối một Secret đã tồn tại nhưng không có Helm ownership. Template 3.1.3 ghi rõ installer phải **adopt** Secret này trước `helm upgrade`; Secret cũng có `helm.sh/resource-policy: keep` để bảo toàn fingerprint. Vì vậy runbook luôn chạy `prepare-vvp-license-upgrade.sh` trước lần activation và trước các lần thay license sau này. Script chỉ kiểm tra token và bổ sung ownership metadata; **không sửa fingerprint**.
+### Lấy token
 
-### Lấy installation token
+Đọc token từ log AppManager của lần cài đặt vừa tạo và lưu vào `.work/installation-token.txt` để helper sử dụng.
 
 ```bash
-kubectl logs -n vvp-system vvp-appmanager-0 --tail=-1 | grep -A1 'Your installation token is:'
-mkdir -p .work
-kubectl logs -n vvp-system vvp-appmanager-0 --tail=-1 \
-  | awk '/Your installation token is:/{getline; print; exit}' \
-  > .work/installation-token.txt
-chmod 600 .work/installation-token.txt
-cat .work/installation-token.txt
+(
+  umask 077 &&
+  mkdir -p .work &&
+  kubectl logs vvp-appmanager-0 -n vvp-system --tail=-1 > .work/appmanager-bootstrap.log &&
+  grep -A2 'Your installation token is:' .work/appmanager-bootstrap.log &&
+  read -r -p 'Dán installation token từ log: ' INSTALLATION_TOKEN &&
+  test -n "$INSTALLATION_TOKEN" &&
+  printf '%s\n' "$INSTALLATION_TOKEN" > .work/installation-token.txt
+)
 ```
 
-Lưu token này. Gửi cho Ververica để nhận license dành riêng cho installation đó. Không dùng license của cụm khác.
+### Dừng chờ vendor
 
-### Tạo `31-values-license.yaml`
+Gửi installation token đến `license_request@ververica.com`; dừng tại đây đến khi nhận license cho đúng installation này.
 
-Copy file example rồi thay `{}` bằng **toàn bộ object `data`** Ververica cấp:
+### Thay license trực tiếp trong `30-values-vvp.yaml`
+
+Mở file values đã dùng để cài đặt. Thay `{}` tại `global.vvp.license.data` bằng toàn bộ object license vendor cấp cho installation token vừa gửi; giữ nguyên các cấu hình khác. Không chạy lại block tạo values ở bước 5 vì sẽ ghi đè license. Không dùng `data: {}` để kích hoạt. File này chứa license sau khi sửa; không commit hoặc chia sẻ file values đã điền license.
 
 ```bash
-cp 31-values-license.yaml.example 31-values-license.yaml
-chmod 600 31-values-license.yaml
+chmod 600 30-values-vvp.yaml &&
+vi 30-values-vvp.yaml
 ```
 
-Cấu trúc phải là:
+Template `ververica-platform/templates/license-fingerprint-secret.yaml` trong [package 3.1.3](ververica-platform-3.1.3.tgz) render Secret khi có inline token và không có `global.licenseSecret`; helper chạy trước upgrade để tránh conflict ownership với Secret có sẵn. Helper kiểm cấu trúc, base64, spec/token và ownership, backup/adopt khi cần, không sửa fingerprint data. Đây không phải helper vendor và không xác minh chữ ký mật mã.
 
-```yaml
-global:
-  vvp:
-    license:
-      data:
-        kind: License
-        apiVersion: v1
-        metadata:
-          # vendor payload - giữ nguyên
-        spec:
-          # vendor payload - giữ nguyên
-```
-
-Không tự sửa `token`, `licenseSpec`, `signature`, `licenseId`, `licensedTo` hoặc `expires`.
-
-
-### File `prepare-vvp-license-upgrade.sh`
-
-Helper này là runbook helper cho exact chart 3.1.3, không phải một binary của Ververica. Nó kiểm tra `licenseSpec == spec`, token license khớp installation token/fingerprint, kiểm tra không có fingerprint Secret trùng label, rồi mới bổ sung Helm ownership metadata nếu Secret đã tồn tại. Nó **không sửa `.data.fingerprint`** và không thể tự kiểm chứng chữ ký cryptographic; VVP validator thực hiện bước đó khi khởi động.
+### Tạo `prepare-vvp-license-upgrade.sh`
 
 ```bash
+cat > prepare-vvp-license-upgrade.sh <<'EOF' &&
 #!/usr/bin/env bash
 set -euo pipefail
 umask 077
@@ -539,7 +391,7 @@ CLI="${KUBECTL:-kubectl}"
 NAMESPACE="${NAMESPACE:-vvp-system}"
 RELEASE="${RELEASE:-ververica-platform}"
 SECRET="vvp-license-fingerprint"
-LICENSE_FILE="${1:-31-values-license.yaml}"
+LICENSE_FILE="${1:-30-values-vvp.yaml}"
 TOKEN_FILE="${INSTALLATION_TOKEN_FILE:-.work/installation-token.txt}"
 
 for bin in "$CLI" yq jq base64; do
@@ -642,87 +494,34 @@ chmod 600 backups/${SECRET}-*.yaml 2>/dev/null || true
   --overwrite
 
 echo "PASS: fingerprint Secret adopted by Helm release $RELEASE/$NAMESPACE; data was not changed"
-```
-Chạy:
-
-```bash
+EOF
 chmod +x prepare-vvp-license-upgrade.sh
-./prepare-vvp-license-upgrade.sh 31-values-license.yaml
 ```
 
-Expected: token trong license, decoded `licenseSpec`, và fingerprint Secret phải đồng nhất; nếu Secret chưa có Helm metadata, script bổ sung `app.kubernetes.io/managed-by=Helm` và `meta.helm.sh/release-*`.
+### Kích hoạt license
 
-## 10. Apply license
+Sau Helm upgrade, xóa hai Pod để cưỡng bức restart nhằm nạp license; StatefulSet controller sẽ tạo Pod thay thế. Các lệnh rollout bên dưới chờ hai StatefulSet sẵn sàng.
 
-Render lại trước upgrade:
-
-```bash
-helm template ververica-platform \
-  ./ververica-platform-3.1.3.tgz \
-  -n vvp-system \
-  -f 30-values-vvp.yaml \
-  -f 31-values-license.yaml \
-  --post-renderer ./patch-vvp-scheduling-lab.py \
-  > /tmp/vvp-license-rendered.yaml
-```
-
-Lần activation đầu dùng `helm upgrade` **không `--atomic`** để không rollback license/fingerprint trong lúc StatefulSet đang chuyển revision:
+Chỉ chạy sau khi đã lưu license vendor vào `30-values-vvp.yaml` và tạo helper thành công. Helper phải thành công trước khi Helm cập nhật release; chỉ chuyển sang bước truy cập khi cả hai lệnh rollout hoàn tất. Nếu một lệnh lỗi, dừng tại bước này và xử lý nguyên nhân.
 
 ```bash
-helm upgrade ververica-platform \
-  ./ververica-platform-3.1.3.tgz \
-  -n vvp-system \
-  -f 30-values-vvp.yaml \
-  -f 31-values-license.yaml \
-  --post-renderer ./patch-vvp-scheduling-lab.py
-```
-
-Theo dõi:
-
-```bash
-kubectl get pods -n vvp-system -w
-```
-
-Sau khi pod lên:
-
-```bash
-kubectl rollout status sts/vvp-appmanager -n vvp-system --timeout=300s
+./prepare-vvp-license-upgrade.sh 30-values-vvp.yaml &&
+helm upgrade ververica-platform ../ververica-platform-3.1.3.tgz \
+  -n vvp-system -f 30-values-vvp.yaml \
+  --post-renderer ./patch-vvp-scheduling-lab.py &&
+kubectl delete pod vvp-appmanager-0 vvp-gateway-0 -n vvp-system --ignore-not-found=true --wait=true &&
+kubectl rollout status sts/vvp-appmanager -n vvp-system --timeout=300s &&
 kubectl rollout status sts/vvp-gateway -n vvp-system --timeout=300s
 ```
 
-Nếu StatefulSet đã có `updateRevision` mới nhưng pod vẫn giữ revision cũ và NotReady, **chỉ sau khi kiểm tra license/fingerprint khớp**, xóa pod cũ để StatefulSet tạo lại:
+## 8. Cấu hình truy cập giao diện LAB
+
+HTTPRoute là tích hợp hạ tầng LAB ngoài Helm. Service `api-gateway` dùng port name `http-alt`, port từ values là `8080`, theo `ververica-platform/charts/api-gateway/templates/service.yaml` trong [package 3.1.3](ververica-platform-3.1.3.tgz); không dùng port 80 từ ví dụ Ingress của docs.
+
+### Tạo `40-vvp-httproute.yaml`
 
 ```bash
-kubectl get sts vvp-appmanager vvp-gateway -n vvp-system \
-  -o custom-columns='NAME:.metadata.name,CURRENT:.status.currentRevision,UPDATE:.status.updateRevision,READY:.status.readyReplicas'
-```
-
-## 11. Verify license chain
-
-```bash
-LICENSE_TOKEN=$(yq -r '.global.vvp.license.data.spec.params.token' 31-values-license.yaml)
-SPEC_TOKEN=$(yq -r '.global.vvp.license.data.metadata.annotations.licenseSpec' 31-values-license.yaml | base64 -d | jq -r '.params.token')
-FINGERPRINT=$(kubectl get secret vvp-license-fingerprint -n vvp-system -o jsonpath='{.data.fingerprint}' | base64 -d)
-printf 'values      : %s\nlicenseSpec : %s\nfingerprint : %s\n' "$LICENSE_TOKEN" "$SPEC_TOKEN" "$FINGERPRINT"
-[ "$LICENSE_TOKEN" = "$SPEC_TOKEN" ] && [ "$SPEC_TOKEN" = "$FINGERPRINT" ]
-```
-
-Check live license mounted by both services:
-
-```bash
-kubectl exec -n vvp-system vvp-appmanager-0 -- cat /vvp/etc/application-license.yaml > /tmp/appmanager-license.yaml
-kubectl exec -n vvp-system vvp-gateway-0 -- cat /vvp/etc/application-license.yaml > /tmp/gateway-license.yaml
-yq '.vvp.license.data.spec.licenseId, .vvp.license.data.spec.params.token' /tmp/appmanager-license.yaml
-yq '.vvp.license.data.spec.licenseId, .vvp.license.data.spec.params.token' /tmp/gateway-license.yaml
-```
-
-## 12. Expose bằng Gateway API
-
-LAB Gateway đã xác nhận: `gateway-system/apps-gateway`, address `192.168.100.50`.
-
-### `40-vvp-httproute.yaml`
-
-```yaml
+cat > 40-vvp-httproute.yaml <<'EOF'
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -738,71 +537,55 @@ spec:
     - backendRefs:
         - name: api-gateway
           port: 8080
+EOF
 ```
 
 ```bash
-kubectl apply -f 40-vvp-httproute.yaml
-kubectl get httproute vvp -n vvp-system
-kubectl describe httproute vvp -n vvp-system
+kubectl apply -f 40-vvp-httproute.yaml &&
+kubectl get httproute vvp -n vvp-system -o yaml
 ```
 
-Conditions cần có `Accepted=True` và `ResolvedRefs=True`. DNS:
+HTTPRoute cần `Accepted=True` và `ResolvedRefs=True` tại đúng parent `gateway-system/apps-gateway`; listener phải cho namespace `vvp-system` attach qua `allowedRoutes`, theo [Cross-Namespace routing](https://gateway-api.sigs.k8s.io/guides/user-guides/multiple-ns/). Nếu chưa đạt, dừng và liên hệ owner Gateway; không tự sửa Gateway chung hoặc thêm ReferenceGrant cho Route→Gateway.
 
-```text
-vvp.apps.k8s.bnh.vn -> 192.168.100.50
-```
-
-Test trước DNS:
+Chỉ kiểm tra URL khi HTTPRoute đã được chấp nhận và DNS đúng. HTTP 2xx không chứng minh Flink runtime hoạt động.
 
 ```bash
-curl -v -H 'Host: vvp.apps.k8s.bnh.vn' http://192.168.100.50/
+curl --fail --show-error http://vvp.apps.k8s.bnh.vn/
 ```
 
-## 13. Final verification
+## 9. Cấu hình Deployment Target
+
+Mở endpoint trong bảng bằng trình duyệt. Trong UI, theo [Create a Deployment Target](https://docs.ververica.com/docs/vvp3/getting-started#create-a-deployment-target): **Deployment Targets → Create Deployment Target**, nhập **Deployment Target Name** là `lab`, **Kubernetes Namespace** là `vvp-deploy`, chọn **OK**. Nếu target `lab` đã trỏ đúng namespace thì giữ nguyên. Nếu tên đó trỏ namespace khác, dừng; không sửa/xóa target có thể đang được sử dụng. Đây là cấu hình namespace runtime, chưa chứng minh Flink job hoạt động.
+
+## 10. Cleanup VVP
+
+**Chỉ chạy khi muốn gỡ installation LAB.** Xóa hai namespace cùng tài nguyên bên trong và CRD VVP cấp cluster; không chạy nếu installation khác dùng chung namespace/CRD. PostgreSQL/S3/registry external giữ nguyên. Block này không xác nhận xóa volume backend, không gỡ label worker hoặc xóa file local; lỗi Helm bị bỏ qua theo lệnh dưới đây.
 
 ```bash
-kubectl get pods -n vvp-system -o wide
-kubectl get deploy,sts -n vvp-system
-kubectl get pvc -n vvp-system
-kubectl get svc api-gateway -n vvp-system
+helm uninstall ververica-platform \
+  -n vvp-system 2>/dev/null || true
+
+kubectl delete namespace vvp-system vvp-deploy \
+  --ignore-not-found=true \
+  --wait=true
+
+while kubectl get ns vvp-system >/dev/null 2>&1 || \
+      kubectl get ns vvp-deploy >/dev/null 2>&1; do
+  echo "Waiting for namespace cleanup..."
+  sleep 3
+done
+
+kubectl delete crd \
+  vvp3deployments.v3.ververica.platform \
+  --ignore-not-found=true
 ```
 
-Control-plane selector phải còn sau mọi Helm upgrade:
+Trước khi cài lại, tự đặt `global.vvp.license.data` trong `30-values-vvp.yaml` về `{}` và lấy license cho token mới. Không chạy lại SQL tạo role/DB đã tồn tại; dữ liệu external có thể còn state cũ.
 
-```bash
-kubectl get deploy,sts -n vvp-system -o json | jq -r '.items[] | "\(.kind)/\(.metadata.name)  \(.spec.template.spec.nodeSelector // {})"'
-```
+## Nguồn tham chiếu
 
-Flink runtime policy được kiểm tra khi tạo deployment/session cluster mới:
-
-```bash
-kubectl get pods -n vvp-deploy -o wide
-kubectl get pods -n vvp-deploy -o json | jq -r '.items[] | "\(.metadata.name)  \(.spec.nodeSelector // {})"'
-```
-
-## 14. Quy tắc upgrade về sau
-
-Mọi Helm command trên Kubernetes phải luôn mang:
-
-```text
---values 30-values-vvp.yaml
---values 31-values-license.yaml
---post-renderer ./patch-vvp-scheduling-lab.py
-```
-
-Trước khi đổi/renew license: chạy lại `prepare-vvp-license-upgrade.sh`; nếu ownership đã đúng, script no-op nhưng vẫn kiểm tra token/fingerprint. Khi hệ thống đã healthy ổn định, các upgrade cấu hình thông thường có thể dùng `--wait --timeout 10m --atomic`. Không uninstall/reinstall để đổi license.
-
-## 15. Cleanup / anti-patterns
-
-Không đưa các mục sau vào baseline:
-
-- `global.nodeSelector` / `global.affinity` của customer fork.
-- OpenShift `openshift.io/node-selector`.
-- `global.ingress` khi đã dùng Gateway API.
-- custom Prometheus port `9249`.
-- `systemDeploymentDefaults` / `systemSessionClusterDefaults`.
-- `batchSpec`.
-- application-level `fs.s3a.*` credentials.
-- `vvp-k8soperator` DB khi operator vẫn tắt.
-- xóa `vvp-license-fingerprint` để “reset” license.
-- bỏ post-renderer ở một Helm upgrade rồi thêm lại ở lần sau.
+- [Getting Started: Self-managed v3.x](https://docs.ververica.com/docs/vvp3/getting-started): điều kiện hỗ trợ, namespace/Secret, install/license và Deployment Target. Trang rolling **3.1 (latest)** có ví dụ install 3.1.1; runbook dùng package 3.1.3.
+- [PostgreSQL as Metadata Store](https://docs.ververica.com/docs/vvp3/user-guides/admin-operator-guide/postgresql-metadata-store): provider, `createIfMissing` và tạo DB thủ công.
+- [Private Image Registry](https://docs.ververica.com/docs/vvp3/user-guides/admin-operator-guide/private-image-registry): mirror và pull Secret; tag ví dụ 3.1.2 không phải baseline 3.1.3.
+- [Cross-Namespace routing](https://gateway-api.sigs.k8s.io/guides/user-guides/multiple-ns/): `parentRefs`/`allowedRoutes`, không chứng nhận endpoint LAB.
+- [package 3.1.3](ververica-platform-3.1.3.tgz): các member dưới prefix `ververica-platform/`: `Chart.yaml`, `values.yaml`, `charts/common/templates/_security.tpl`, `templates/license-fingerprint-secret.yaml`, `charts/api-gateway/templates/service.yaml`, `charts/vvp-appagent/templates/sql-pvc.yaml`.
