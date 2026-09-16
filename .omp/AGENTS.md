@@ -4,10 +4,10 @@ Repository chứa baseline VVP 3.1.3 cho Kubernetes và OpenShift. Nội dung b�
 
 ## Nguyên tắc khi tiếp tục
 
-- Đối chiếu summary với runbook, source và working tree hiện tại trước khi sửa; giữ nguyên customization và license local của người dùng.
+- Đối chiếu context này với runbook, source và working tree hiện tại trước khi sửa; không ghi đè customization hoặc bản local đã điền license. Trước mọi commit, kiểm tra blob staged của cả hai `30-values-vvp.yaml`: `global.vvp.license.data` phải là `{}`. Tuyệt đối không stage payload license; nếu không thể tách thay đổi an toàn, để file values ngoài commit, không reset bản local để phục vụ Git.
 - Khi sửa artifact, đồng bộ heredoc tương ứng trong runbook. Không tự áp dụng các đề xuất chưa được chấp thuận.
 - Phân biệt kiểm chứng offline, stub smoke, output do người dùng cung cấp và kiểm chứng live. Không chạy mutation cluster hoặc cleanup nếu chưa được yêu cầu.
-- Không đưa license thật, installation token, log hay backup vào Git. Credential LAB hiện có được giữ theo quyết định đã ghi trong summary; không sao chép giá trị vào context, summary hoặc thông điệp commit.
+- Không đưa license thật, installation token, log hay backup vào Git. Credential LAB hiện có được giữ theo quyết định đã ghi trong context này; không sao chép giá trị vào context hoặc thông điệp commit.
 - Cập nhật trực tiếp `.omp/AGENTS.md` khi quyết định hoặc trạng thái bàn giao thay đổi; đây là nguồn context bàn giao duy nhất.
 
 ## Context bàn giao
@@ -37,7 +37,7 @@ Repository chứa hai phương án LAB: vanilla Kubernetes và OpenShift. Hai ru
 
 ### License: chỉ một file values
 
-Cả hai `30-values-vvp.yaml` có `global.vvp.license.data: {}`. Khối `vvp` ở trong `global`, sau `blobStorage`, trước override subchart. Root chart values không khai báo sẵn khối license; đây là đường dẫn template dùng, không có thứ tự YAML bắt buộc của vendor.
+Bản baseline được commit của cả hai `30-values-vvp.yaml` phải có `global.vvp.license.data: {}`; bản local sau activation có thể đã điền license và không được ghi đè. Khối `vvp` ở trong `global`, sau `blobStorage`, trước override subchart. Root chart values không khai báo sẵn khối license; đây là đường dẫn template dùng, không có thứ tự YAML bắt buộc của vendor.
 
 Sau bootstrap, lấy token AppManager, gửi `license_request@ververica.com`, thay `{}` bằng toàn bộ object vendor ngay trong file values hiện có. Không tạo lại heredoc values vì sẽ ghi đè license. Không commit/chia sẻ values đã điền license.
 
@@ -45,7 +45,7 @@ Sau bootstrap, lấy token AppManager, gửi `license_request@ververica.com`, th
 
 Activation nối `&&`: helper → Helm upgrade → delete `vvp-appmanager-0` và `vvp-gateway-0` với namespace, `--ignore-not-found=true --wait=true` → rollout cả hai StatefulSet (300s). Kubernetes luôn truyền post-renderer; OpenShift dùng `KUBECTL=oc` cho helper. Xóa Pod là restart chủ động để nạp license; không suy diễn rằng StatefulSet không recreate Pod.
 
-Trước commit bàn giao, source OpenShift từng có license thật đã được phục hồi từ heredoc placeholder, sau khi xác nhận mọi cấu hình ngoài license khớp nhau. Không lưu bản sao license trong summary.
+Trước commit bàn giao ban đầu, source OpenShift từng có license thật đã được phục hồi từ heredoc placeholder, sau khi xác nhận mọi cấu hình ngoài license khớp nhau. Đây là ghi nhận lịch sử, không phải quy trình được phép lặp lại để chuẩn bị commit; không ghi đè bản local đã điền license. Không lưu bản sao license trong context này.
 
 ### Khác biệt profile
 
@@ -95,11 +95,18 @@ Trong phiên đã chạy offline: heredoc cat roundtrip/byte parity; bash -n; re
 
 User đã cung cấp output OpenShift: tất cả platform Pod 1/1 Running; appmanager/gateway được tạo lại sau restart; Route HTTP cũ Admitted=True nhưng UI không truy cập được. Đây là bằng chứng do user cung cấp, không phải live verification của assistant. HTTPS hostname mới đã render vào ConfigMap api-gateway-settings; chưa có bằng chứng live DNS/cert/header/UI sau thay đổi. Không kết luận Route là nguyên nhân chắc chắn của lỗi UI, không tuyên bố Flink runtime đã chạy job.
 
+### Phát hiện review end-to-end chưa sửa
+
+- Helper của cả hai profile coi lỗi GET Secret như Secret không tồn tại; các lần đọc ownership còn bỏ qua lỗi. Lỗi API/RBAC có thể dẫn đến fallback token local, báo PASS sai hoặc bỏ qua kiểm tra ownership. Cần phân biệt NotFound với lỗi truy cập và dừng khi không đọc được ownership.
+- Helper in cả license token và cluster token khi mismatch; cần bỏ giá trị nhạy cảm khỏi thông báo lỗi. Không chia sẻ output lỗi hiện tại.
+- Kubernetes chỉ đặt nodeSelector trong `globalDeploymentDefaults.spec` và session defaults, chưa đặt `batchSpec`. Chart local tách defaults STREAMING/BATCH; chưa được khẳng định dedicated batch jobs cũng bị pin vào pool LAB. Post-renderer không xử lý Pod do runtime tạo sau đó.
+- Review này đã kiểm offline 13 heredoc, Bash syntax và render 83 manifest mỗi profile; Service HTTP 8080, Route edge và platform scheduling đạt các assertion. Đây không phải kiểm chứng end-to-end trên cluster; các phát hiện trên chưa được sửa trong source/runbook.
+
 ### Git, credentials và bàn giao
 
 User yêu cầu commit/push tới `git@github.com:phamduongw/ververica-platform.git`, cho biết auth đã sẵn sàng và repository private. Sau khi được cảnh báo credential PostgreSQL/S3/registry có trong baseline và commit lịch sử, user xác nhận giữ nguyên tất cả. Vì vậy giữ credential LAB và lịch sử, không sanitize/rewrite ngoài ý muốn. Private repository không thay thế quản trị secret; người được cấp quyền vẫn đọc được credential và history. License thật không được commit.
 
-Hai .gitignore chỉ giữ .work/backups/.venv/__pycache__; không ignore tracked values vì không bảo vệ được file tracked. Không commit log/token/backup/render output. Không force-push hay sửa lịch sử nếu không có yêu cầu mới. Summary không chứa giá trị credential hoặc license.
+Hai .gitignore chỉ giữ .work/backups/.venv/__pycache__; không ignore tracked values vì không bảo vệ được file tracked. Không commit log/token/backup/render output. Không force-push hay sửa lịch sử nếu không có yêu cầu mới. Context này không chứa giá trị credential hoặc license.
 
 ### Nguồn đã đối chiếu
 
@@ -112,6 +119,6 @@ Hai .gitignore chỉ giữ .work/backups/.venv/__pycache__; không ignore tracke
 
 ### Khi tiếp tục ở session khác
 
-OMP tự nạp `.omp/AGENTS.md` làm context đầu phiên. File này là nguồn context bàn giao duy nhất của repository; cập nhật trực tiếp khi quyết định thay đổi, không tạo bản summary trùng lặp. Không chứa giá trị credential/token/license. `/handoff` là cơ chế compact trong session, không thay thế tài liệu bàn giao được version control này.
+OMP tự nạp `.omp/AGENTS.md` làm context đầu phiên. File này là nguồn context bàn giao duy nhất của repository; cập nhật trực tiếp khi quyết định thay đổi, không tạo bản context trùng lặp. Không chứa giá trị credential/token/license. `/handoff` là cơ chế compact trong session, không thay thế tài liệu bàn giao được version control này.
 
-Đọc summary này rồi hai runbook/source thực tế; working-tree bytes mới nhất là authority, không ghi đè license/customization của user. Chỉ hỏi lại các quyết định có tradeoff thực sự, không khôi phục các phần user đã bỏ. Nếu sửa artifact, đồng bộ heredoc và mọi callsite; source values trong commit phải có license {}. Verify offline trước push và ghi chính xác phần chưa được kiểm live.
+Đọc context này rồi hai runbook/source thực tế; working-tree bytes mới nhất là authority, không ghi đè license/customization của user. Chỉ hỏi lại các quyết định có tradeoff thực sự, không khôi phục các phần user đã bỏ. Nếu sửa artifact, đồng bộ heredoc và mọi callsite; trước mọi commit kiểm tra staged values có `global.vvp.license.data: {}`, không stage payload license. Verify offline trước push và ghi chính xác phần chưa được kiểm live.
